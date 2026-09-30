@@ -1,0 +1,35 @@
+{
+  "project": "Mirror (مِرآة)",
+  "repository": "bayan-nlp-leenaotb12",
+  "language_pair": "ar-en",
+  "task": "bilingual translation with entity extraction and entity alignment",
+  "data": {
+    "name": "Helsinki-NLP/opus-100",
+    "config": "ar-en",
+    "split": "train",
+    "streaming": true
+  },
+  "models": {
+    "translation": "Helsinki-NLP/opus-mt-ar-en",
+    "arabic_ner": "CAMeL-Lab/bert-base-arabic-camelbert-msa-ner",
+    "english_ner": "en_core_web_sm"
+  },
+  "alignment": {
+    "threshold": 0.35,
+    "method": "translated-entity similarity + type compatibility + greedy one-to-one"
+  },
+  "measured_artifact": {
+    "prepared_sentences": 78,
+    "prepared_words": 1208,
+    "html_rows": 96,
+    "unique_aligned_entity_ids": 18,
+    "entity_word_spans": 49
+  },
+  "quality_metrics_available": false,
+  "colab_url": "",
+  "demo_url": "",
+  "final_tag": "v1.0.0",
+  "links": {
+    "colab": "https://colab.research.google.com/drive/1jVzY1LAU6NyPvAIbS08k6rjx3Ihhm3Iv?usp=sharing"
+  }
+}

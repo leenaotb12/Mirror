@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>أكواد مشروع مِرآة</title>
+<style>
+body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;background:#f7f5ef;color:#1a1a1a;margin:0;padding:32px;line-height:1.9}
+main{max-width:980px;margin:0 auto;background:#fff;padding:40px 48px;border-radius:16px;box-shadow:0 8px 24px rgba(0,0,0,.06)}
+h1{color:#14213d;border-bottom:3px solid #fde047;padding-bottom:12px}
+h2{color:#14213d;margin-top:40px;border-right:6px solid #1f7a8c;padding-right:14px}
+h3{color:#1f7a8c}
+pre{direction:ltr;text-align:left;background:#14213d;color:#f7f5ef;padding:20px;border-radius:12px;overflow-x:auto;position:relative;line-height:1.6;font-size:14px}
+code{font-family:Consolas,'Courier New',monospace}
+p code,li code,td code{background:#eef2f5;color:#14213d;padding:2px 6px;border-radius:5px;direction:ltr;unicode-bidi:embed}
+table{width:100%;border-collapse:collapse;margin:16px 0}
+th{background:#14213d;color:#f7f5ef;padding:10px 14px;text-align:right}
+td{padding:10px 14px;border:1px solid #e0ddd2}
+tr:nth-child(even) td{background:#f7f5ef}
+button.copy{position:absolute;top:8px;left:8px;background:#fde047;color:#14213d;border:0;border-radius:6px;padding:4px 12px;font-size:13px;cursor:pointer}
+</style></head><body><main>
+<h1>أكواد مشروع «مِرآة» مرتبة حسب الخطوات</h1>
+<p>المشروع: محاذاة ثنائية اللغة للنص العربي وترجمته الإنجليزية، مع استخلاص الكيانات وربط كل كيان بنظيره.</p>
+<h2>أولًا: خلايا Colab</h2>
+<p><strong>خلية 1: التثبيت</strong></p>
+<pre><code class="language-python">!pip install -q transformers sentencepiece spacy datasets
+!python -m spacy download en_core_web_sm
+</code></pre>
+<p><strong>خلية 2: الخطوة 1، تجهيز النص العربي من مدونة هلسنكي (OPUS-100)</strong></p>
+<pre><code class="language-python">import re
+from datasets import load_dataset
+
+ds = load_dataset(&quot;Helsinki-NLP/opus-100&quot;, &quot;ar-en&quot;, split=&quot;train&quot;, streaming=True)
+lines, words = [], 0
+for ex in ds:
+    ar = ex[&quot;translation&quot;][&quot;ar&quot;].strip()      # نأخذ الجانب العربي فقط
+    if len(ar.split()) &lt; 6:
+        continue
+    if not re.search(r&quot;[.!؟?]$&quot;, ar):
+        ar += &quot;.&quot;
+    lines.append(ar)
+    words += len(ar.split())
+    if words &gt;= 1200:
+        break
+
+open(&quot;input.txt&quot;, &quot;w&quot;, encoding=&quot;utf-8&quot;).write(&quot;\n&quot;.join(lines))
+print(&quot;عدد الجمل:&quot;, len(lines), &quot;| عدد الكلمات:&quot;, words)
+</code></pre>
+<p><strong>خلية 3: كتابة السكربت</strong> (الكود الكامل في القسم الثاني أدناه، ويبدأ بالسطر <code>%%writefile entities_alignment.py</code>)</p>
+<p><strong>خلية 4: التشغيل</strong></p>
+<pre><code class="language-python">!python entities_alignment.py input.txt entities_alignment_reader.html
+</code></pre>
+<p><strong>خلية 5: تنزيل الصفحة</strong></p>
+<pre><code class="language-python">from google.colab import files
+files.download(&quot;entities_alignment_reader.html&quot;)
+</code></pre>
+<h2>ثانيًا: السكربت الكامل مقسّمًا بالخطوات</h2>
+<pre><code class="language-python">%%writefile entities_alignment.py
+# -*- coding: utf-8 -*-
+import re, sys, html, torch
+from difflib import SequenceMatcher
+from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
+import spacy
+
+MT_MODEL = &quot;Helsinki-NLP/opus-mt-ar-en&quot;                         # نموذج الترجمة (هلسنكي)
+AR_NER_MODEL = &quot;CAMeL-Lab/bert-base-arabic-camelbert-msa-ner&quot;   # نموذج الكيانات العربية
+THRESHOLD = 0.35                                                # عتبة المواءمة
+
+# ============ الخطوة 2: التنظيف ============
+def clean(text):
+    text = re.sub(r&quot;[\u064B-\u0652\u0670]&quot;, &quot;&quot;, text)                 # حذف التشكيل
+    text = text.replace(&quot;\u0640&quot;, &quot;&quot;)                                  # حذف التطويل
+    text = re.sub(r&quot;[\u200b-\u200f\u202a-\u202e\ufeff]&quot;, &quot;&quot;, text)    # محارف خفية
+    text = re.sub(r&quot;https?://\S+&quot;, &quot; &quot;, text)                          # الروابط
+    text = re.sub(r&quot;[ \t\r\n]+&quot;, &quot; &quot;, text)                            # توحيد المسافات
+    text = re.sub(r&quot;\s+([.،؛:!؟?])&quot;, r&quot;\1&quot;, text)                      # مسافة قبل الترقيم
+    return text.strip()
+
+# ============ الخطوة 2: التقطيع إلى جمل عند النقطة ============
+def split_sentences(text):
+    parts = re.split(r&quot;(?&lt;=[.!؟?])(?&lt;!\d\.)\s+&quot;, text)
+    return [p.strip() for p in parts if len(p.strip()) &gt; 1]
+
+# ============ الخطوة 4: كيانات الزمن العربية (تعبيرات نمطية) ============
+MONTHS = &quot;يناير|فبراير|مارس|أبريل|ابريل|إبريل|مايو|يونيو|يونيه|يوليو|يوليه|أغسطس|اغسطس|سبتمبر|أكتوبر|اكتوبر|نوفمبر|ديسمبر|كانون الثاني|كانون الأول|شباط|آذار|نيسان|أيار|حزيران|تموز|آب|أيلول|تشرين الأول|تشرين الثاني|محرم|صفر|ربيع الأول|ربيع الآخر|جمادى الأولى|جمادى الآخرة|رجب|شعبان|رمضان|شوال|ذو القعدة|ذو الحجة&quot;
+DAYS = &quot;الأحد|الاثنين|الإثنين|الثلاثاء|الأربعاء|الخميس|الجمعة|السبت&quot;
+ORD = &quot;الأول|الثاني|الثالث|الرابع|الخامس|السادس|السابع|الثامن|التاسع|العاشر|الحادي عشر|الثاني عشر|الثالث عشر|الرابع عشر|الخامس عشر|السادس عشر|السابع عشر|الثامن عشر|التاسع عشر|العشرين|الحادي والعشرين&quot;
+TIME_PATTERNS = [
+    rf&quot;(?:(?:يوم\s+)?(?:{DAYS})\s+)?(?:\d{{1,2}}\s+)?(?:شهر\s+)?(?:{MONTHS})(?:\s+(?:من\s+)?(?:عام|سنة)?\s*\d{{3,4}}(?:\s*(?:م|هـ|ه))?)?&quot;,
+    rf&quot;القرن\s+(?:{ORD})(?:\s+(?:الميلادي|الهجري|قبل الميلاد))?&quot;,
+    rf&quot;(?:عام|سنة)\s+\d{{3,4}}(?:\s*(?:م|هـ|ه))?&quot;,
+    rf&quot;\b(?:{DAYS})\b&quot;,
+    r&quot;\b(?:1[0-9]{3}|20[0-9]{2})\b(?:\s*(?:م|هـ))?&quot;,
+]
+def time_entities(text):
+    out = []
+    for p in TIME_PATTERNS:
+        for m in re.finditer(p, text):
+            s, e = m.span()
+            if e &gt; s and not any(s &lt; e2 and e &gt; s2 for s2, e2, _ in out):
+                out.append((s, e, &quot;DATE&quot;))
+    return out
+
+# ============ الخطوة 4: استخراج الكيانات (عربي + إنجليزي) ============
+GROUP = {&quot;PER&quot;: &quot;PER&quot;, &quot;PERSON&quot;: &quot;PER&quot;, &quot;LOC&quot;: &quot;LOC&quot;, &quot;GPE&quot;: &quot;LOC&quot;, &quot;FAC&quot;: &quot;LOC&quot;,
+         &quot;ORG&quot;: &quot;ORG&quot;, &quot;MISC&quot;: &quot;MISC&quot;, &quot;NORP&quot;: &quot;MISC&quot;, &quot;EVENT&quot;: &quot;MISC&quot;, &quot;PRODUCT&quot;: &quot;MISC&quot;,
+         &quot;WORK_OF_ART&quot;: &quot;MISC&quot;, &quot;LAW&quot;: &quot;MISC&quot;, &quot;LANGUAGE&quot;: &quot;MISC&quot;, &quot;DATE&quot;: &quot;DATE&quot;, &quot;TIME&quot;: &quot;DATE&quot;}
+
+def arabic_entities(text, ner):
+    ents = time_entities(text)
+    for r in ner(text):
+        s, e = r[&quot;start&quot;], r[&quot;end&quot;]
+        g = GROUP.get(r[&quot;entity_group&quot;].replace(&quot;B-&quot;, &quot;&quot;).replace(&quot;I-&quot;, &quot;&quot;), &quot;MISC&quot;)
+        if not any(s &lt; e2 and e &gt; s2 for s2, e2, _ in ents):
+            ents.append((s, e, g))
+    return sorted(ents)
+
+def english_entities(text, nlp):
+    return [(x.start_char, x.end_char, GROUP[x.label_]) for x in nlp(text).ents if x.label_ in GROUP]
+
+# ============ الخطوة 5: مواءمة الكيانات ============
+def norm(s): return re.sub(r&quot;[^\w\s]&quot;, &quot;&quot;, s.lower()).strip()
+
+def similarity(a, b):
+    a, b = norm(a), norm(b)
+    if not a or not b: return 0
+    ta, tb = set(a.split()), set(b.split())
+    jac = len(ta &amp; tb) / len(ta | tb)
+    seq = SequenceMatcher(None, a, b).ratio()
+    dig = 0.3 if set(re.findall(r&quot;\d+&quot;, a)) &amp; set(re.findall(r&quot;\d+&quot;, b)) else 0
+    return max(jac, seq) + dig
+
+def align(ar_text, ar_ents, en_text, en_ents, translate_batch, cache):
+    need = list({ar_text[s:e] for s, e, _ in ar_ents if ar_text[s:e] not in cache})
+    if need:
+        for k, v in zip(need, translate_batch(need)): cache[k] = v      # ترجمة كل كيان وحده
+    scored = []
+    for i, (s, e, g) in enumerate(ar_ents):
+        tr = cache[ar_text[s:e]]
+        for j, (s2, e2, g2) in enumerate(en_ents):
+            if g == g2 or &quot;MISC&quot; in (g, g2):
+                sc = similarity(tr, en_text[s2:e2])
+                if sc &gt;= THRESHOLD: scored.append((sc, i, j))
+    pairs, ui, uj = [], set(), set()
+    for sc, i, j in sorted(scored, reverse=True):
+        if i not in ui and j not in uj:                                  # لا يُستخدم كيان مرتين
+            ui.add(i); uj.add(j); pairs.append((i, j))
+    return pairs
+
+# ============ الخطوة 6: العرض والوميض (HTML + CSS + JavaScript) ============
+def words_html(text, ents):
+    &quot;&quot;&quot;كل كلمة في span مستقل، والكلمات داخل الكيان المتواءم تحمل data-eid&quot;&quot;&quot;
+    out = []
+    for m in re.finditer(r&quot;\S+&quot;, text):
+        eid = None
+        for s, e, g, i in ents:
+            if m.start() &lt; e and m.end() &gt; s:
+                eid = i; break
+        w = html.escape(m.group())
+        if eid:
+            out.append(f'&lt;span class=&quot;word entity-word&quot; data-eid=&quot;{eid}&quot; onmouseover=&quot;hl(\'{eid}\')&quot; onmouseout=&quot;unhl()&quot;&gt;{w}&lt;/span&gt;')
+        else:
+            out.append(f'&lt;span class=&quot;word&quot;&gt;{w}&lt;/span&gt;')
+    return &quot; &quot;.join(out)
+
+PAGE = &quot;&quot;&quot;&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;ar&quot;&gt;&lt;head&gt;&lt;meta charset=&quot;utf-8&quot;&gt;&lt;title&gt;الكيانات العربية ومقابلاتها الإنجليزية&lt;/title&gt;
+&lt;style&gt;
+body { font-family: 'Segoe UI', system-ui, sans-serif; background:#f8fafc; margin:0; padding:30px; direction:rtl; }
+.container { max-width:1300px; margin:0 auto; background:white; padding:40px; border-radius:16px; box-shadow:0 10px 25px rgba(0,0,0,0.05); }
+h2 { color:#1e293b; text-align:center; border-bottom:2px solid #f1f5f9; padding-bottom:15px; }
+.subtitle { text-align:center; color:#475569; margin-bottom:30px; }
+.reader-table { width:100%; border-collapse:collapse; table-layout:fixed; }
+.reader-table th { background:#f1f5f9; padding:14px; border:1px solid #e2e8f0; }
+.reader-table td { padding:15px 20px; border:1px solid #e2e8f0; vertical-align:middle; width:50%; }
+.reader-table tr:nth-child(even) { background:#f8fafc; }
+.word { display:inline-block; margin:0 2px; padding:2px 4px; font-size:17px; border-radius:4px; transition:background-color .1s ease; }
+.entity-word { cursor:pointer; border-bottom:2px dotted #94a3b8; }
+.flash-active { background-color:#fde047 !important; color:#0f172a !important; font-weight:bold; box-shadow:0 0 10px #fde047; transform:scale(1.04); }
+.ar-col { text-align:right; line-height:1.8; color:#0f172a; }
+.en-col { text-align:left; line-height:1.8; color:#1e293b; direction:ltr; }
+&lt;/style&gt;
+&lt;script&gt;
+function hl(id){ document.querySelectorAll('[data-eid=&quot;'+id+'&quot;]').forEach(function(e){ e.classList.add('flash-active'); }); }
+function unhl(){ document.querySelectorAll('.flash-active').forEach(function(e){ e.classList.remove('flash-active'); }); }
+&lt;/script&gt;&lt;/head&gt;&lt;body&gt;&lt;div class=&quot;container&quot;&gt;
+&lt;h2&gt;نظام تحديد الكيانات العربية ومقابلاتها الإنجليزية&lt;/h2&gt;
+&lt;p class=&quot;subtitle&quot;&gt;مرر الماوس فوق الكلمات المنقّطة لترى الوميض الأصفر على الكيان ومقابله.&lt;/p&gt;
+&lt;table class=&quot;reader-table&quot;&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;الجملة العربية&lt;/th&gt;&lt;th&gt;الترجمة الإنجليزية&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;
+&lt;tbody&gt;%ROWS%&lt;/tbody&gt;&lt;/table&gt;&lt;/div&gt;&lt;/body&gt;&lt;/html&gt;&quot;&quot;&quot;
+
+# ============ التشغيل: يربط الخطوات كلها ============
+def main(inp, outp):
+    sents = split_sentences(clean(open(inp, encoding=&quot;utf-8&quot;).read()))
+
+    # الخطوة 3: الترجمة بنموذج هلسنكي
+    tok = AutoTokenizer.from_pretrained(MT_MODEL)
+    mt = AutoModelForSeq2SeqLM.from_pretrained(MT_MODEL)
+    def translate_batch(xs):
+        out = []
+        for i in range(0, len(xs), 16):
+            b = tok(xs[i:i+16], return_tensors=&quot;pt&quot;, padding=True, truncation=True, max_length=256)
+            with torch.no_grad():
+                g = mt.generate(**b, max_new_tokens=256, num_beams=4)
+            out += tok.batch_decode(g, skip_special_tokens=True)
+        return out
+
+    # الخطوة 4: تحميل نموذجي الكيانات
+    ner = pipeline(&quot;token-classification&quot;, model=AR_NER_MODEL, aggregation_strategy=&quot;simple&quot;)
+    nlp = spacy.load(&quot;en_core_web_sm&quot;)
+
+    translations = translate_batch(sents)
+    cache, rows, eid, n_ar, n_en = {}, [], 0, 0, 0
+    for ar, en in zip(sents, translations):
+        ar_e, en_e = arabic_entities(ar, ner), english_entities(en, nlp)
+        n_ar += len(ar_e); n_en += len(en_e)
+        pairs = align(ar, ar_e, en, en_e, translate_batch, cache)       # الخطوة 5
+        ar_w, en_w = [], []
+        for i, j in pairs:
+            eid += 1
+            ar_w.append((ar_e[i][0], ar_e[i][1], ar_e[i][2], f&quot;e{eid}&quot;))
+            en_w.append((en_e[j][0], en_e[j][1], ar_e[i][2], f&quot;e{eid}&quot;))
+        rows.append(f'&lt;tr&gt;&lt;td class=&quot;ar-col&quot;&gt;{words_html(ar, ar_w)}&lt;/td&gt;&lt;td class=&quot;en-col&quot;&gt;{words_html(en, en_w)}&lt;/td&gt;&lt;/tr&gt;')
+    open(outp, &quot;w&quot;, encoding=&quot;utf-8&quot;).write(PAGE.replace(&quot;%ROWS%&quot;, &quot;\n&quot;.join(rows)))
+    print(f&quot;جمل: {len(sents)} | كيانات عربية: {n_ar} | كيانات إنجليزية: {n_en} | أزواج متواءمة: {eid}&quot;)
+
+if __name__ == &quot;__main__&quot;:
+    main(sys.argv[1], sys.argv[2])
+</code></pre>
+<h2>ثالثًا: أين كل خطوة في السكربت</h2>
+<table>
+<thead>
+<tr>
+<th>الخطوة</th>
+<th>الدالة أو الجزء</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1. تجهيز النص</td>
+<td>خلية Colab 2 (مكتبة <code>datasets</code>)</td>
+</tr>
+<tr>
+<td>2. التنظيف والتقطيع</td>
+<td><code>clean</code> و<code>split_sentences</code></td>
+</tr>
+<tr>
+<td>3. الترجمة</td>
+<td><code>translate_batch</code> داخل <code>main</code></td>
+</tr>
+<tr>
+<td>4. استخراج الكيانات</td>
+<td><code>time_entities</code> و<code>arabic_entities</code> و<code>english_entities</code></td>
+</tr>
+<tr>
+<td>5. المواءمة</td>
+<td><code>similarity</code> و<code>align</code></td>
+</tr>
+<tr>
+<td>6. العرض والوميض</td>
+<td><code>words_html</code> و<code>PAGE</code> (HTML وCSS وJavaScript)</td>
+</tr>
+</tbody>
+</table>
+<h2>رابعًا: ملاحظات</h2>
+<ul>
+<li>التجربة الأولى تنزّل النماذج من الإنترنت، فتأخذ وقتًا أطول.</li>
+<li>تحسين المواءمة: غيّري <code>THRESHOLD</code> (أقل ليقبل ربطًا أكثر، وأعلى ليتشدد).</li>
+<li>دقة أعلى للإنجليزية: <code>python -m spacy download en_core_web_trf</code> ثم استبدلي <code>en_core_web_sm</code> به في <code>spacy.load</code>.</li>
+</ul>
+</main><script>
+document.querySelectorAll('pre').forEach(function(pre){
+  var b=document.createElement('button'); b.className='copy'; b.textContent='نسخ';
+  b.onclick=function(){navigator.clipboard.writeText(pre.querySelector('code').innerText).then(function(){b.textContent='تم النسخ';setTimeout(function(){b.textContent='نسخ'},1500)})};
+  pre.appendChild(b);
+});
+</script></body></html>

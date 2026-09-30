@@ -1,0 +1,10 @@
+repository: bayan-nlp-leenaotb12
+github_username: leenaotb12
+project: Mirror
+language_pair: ar-en
+final_tag: v1.0.0
+colab_url: ''
+demo_url: ''
+quality_metrics: unavailable_without_gold_annotations
+
+colab: https://colab.research.google.com/drive/1jVzY1LAU6NyPvAIbS08k6rjx3Ihhm3Iv?usp=sharing

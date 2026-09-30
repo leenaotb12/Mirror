@@ -1,0 +1,7 @@
+transformers
+sentencepiece
+spacy
+datasets
+torch
+pytest
+beautifulsoup4

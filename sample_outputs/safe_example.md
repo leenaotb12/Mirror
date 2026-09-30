@@ -1,0 +1,1 @@
+# Safe example (illustrative, not measured output)\n\nArabic: سافرت سارة إلى الرياض.\nEnglish: Sarah traveled to Riyadh.\n\nEntities: سارة ↔ Sarah (PER); الرياض ↔ Riyadh (LOC).\n

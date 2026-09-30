@@ -1,0 +1,54 @@
+{
+  "checks": [
+    {
+      "check": "README.md",
+      "pass": true
+    },
+    {
+      "check": "STUDENT_PROFILE.md",
+      "pass": true
+    },
+    {
+      "check": "PROGRESS.md",
+      "pass": true
+    },
+    {
+      "check": "DECISIONS.md",
+      "pass": true
+    },
+    {
+      "check": "EVALUATION_REPORT.md",
+      "pass": true
+    },
+    {
+      "check": "BENCHMARKS.md",
+      "pass": true
+    },
+    {
+      "check": "MODEL_CARD.md",
+      "pass": true
+    },
+    {
+      "check": "DATA_CARD.md",
+      "pass": true
+    },
+    {
+      "check": "PRESENTATION.md",
+      "pass": true
+    },
+    {
+      "check": "PROJECT_SUMMARY.json",
+      "pass": true
+    },
+    {
+      "check": "SUBMISSION.yml",
+      "pass": true
+    },
+    {
+      "check": "notebooks 00-08",
+      "pass": true
+    }
+  ],
+  "passed": 12,
+  "total": 12
+}
